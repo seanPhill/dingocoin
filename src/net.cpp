@@ -658,6 +658,8 @@ void CNode::copyStats(CNodeStats &stats)
         X(nRecvBytes);
     }
     X(fWhitelisted);
+    X(nProcessedAddrs);
+    X(nRatelimitedAddrs);
 
     // It is common for nodes with good ping times to suddenly become lagged,
     // due to a new block arriving or other large transfer.
@@ -2692,6 +2694,10 @@ CNode::CNode(NodeId idIn, ServiceFlags nLocalServicesIn, int nMyStartingHeightIn
     nNextLocalAddrSend = 0;
     nNextAddrSend = 0;
     nNextInvSend = 0;
+    nAddrTokenBucket = 1; // initialize to 1 to allow self-announcement
+    nAddrTokenTimestamp = GetTimeMicros();
+    nProcessedAddrs = 0;
+    nRatelimitedAddrs = 0;
     fRelayTxes = false;
     fSentAddr = false;
     pfilter = new CBloomFilter();

@@ -694,6 +694,11 @@ bool InitSanityCheck(void)
     if (!glibc_sanity_test() || !glibcxx_sanity_test())
         return false;
 
+    if (!Random_SanityCheck()) {
+        InitError("OS cryptographic RNG sanity check failure. Aborting.");
+        return false;
+    }
+
     return true;
 }
 
@@ -1144,6 +1149,7 @@ bool AppInitSanityChecks()
     // ********************************************************* Step 4: sanity checks
 
     // Initialize elliptic curve code
+    RandomInit();
     ECC_Start();
     globalVerifyHandle.reset(new ECCVerifyHandle());
 

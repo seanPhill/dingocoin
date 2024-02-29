@@ -54,6 +54,13 @@ static const int FEELER_INTERVAL = 120;
 static const unsigned int MAX_INV_SZ = 50000;
 /** The maximum number of new addresses to accumulate before announcing. */
 static const unsigned int MAX_ADDR_TO_SEND = 1000;
+/** The maximum rate of address records we're willing to process on average. Can be bypassed using
+ *  the NetPermissionFlags::Addr permission. */
+static constexpr double MAX_ADDR_RATE_PER_SECOND{0.1};
+/** The soft limit of the address processing token bucket (the regular MAX_ADDR_RATE_PER_SECOND
+ *  based increments won't go above this, but the MAX_ADDR_TO_SEND increment following GETADDR
+ *  is exempt from this limit). */
+static constexpr size_t MAX_ADDR_PROCESSING_TOKEN_BUCKET{MAX_ADDR_TO_SEND};
 /** Maximum length of incoming protocol messages (no message over 4 MB is currently acceptable). */
 static const unsigned int MAX_PROTOCOL_MESSAGE_LENGTH = 4 * 1000 * 1000;
 /** Maximum length of strSubVer in `version` message */
@@ -511,6 +518,8 @@ public:
     double dMinPing;
     std::string addrLocal;
     CAddress addr;
+    uint64_t nProcessedAddrs;
+    uint64_t nRatelimitedAddrs;
 };
 
 
@@ -638,6 +647,14 @@ public:
     std::set<uint256> setKnown;
     int64_t nNextAddrSend;
     int64_t nNextLocalAddrSend;
+
+    /** Number of addresses that can be processed from this peer. */
+    double nAddrTokenBucket;
+    /** When nAddrTokenBucket was last updated, in microseconds */
+    int64_t nAddrTokenTimestamp;
+
+    std::atomic<uint64_t> nProcessedAddrs;
+    std::atomic<uint64_t> nRatelimitedAddrs;
 
     // inventory based relay
     CRollingBloomFilter filterInventoryKnown;

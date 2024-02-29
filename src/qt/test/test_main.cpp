@@ -36,6 +36,7 @@ extern void noui_connect();
 // This is all you need to run all the tests
 int main(int argc, char *argv[])
 {
+    RandomInit();
     ECC_Start();
     SetupEnvironment();
     SetupNetworking();
