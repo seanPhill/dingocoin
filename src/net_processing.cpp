@@ -6,7 +6,6 @@
 #include "net_processing.h"
 
 #include "addrman.h"
-#include "alert.h"
 #include "arith_uint256.h"
 #include "blockencodings.h"
 #include "chainparams.h"
@@ -1362,6 +1361,10 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
             {
                 connman.PushMessage(pfrom, CNetMsgMaker(nSendVersion).Make(NetMsgType::GETADDR));
                 pfrom->fGetAddr = true;
+
+                // When requesting a getaddr, accept an additional MAX_ADDR_TO_SEND addresses in response
+                // (bypassing the MAX_ADDR_PROCESSING_TOKEN_BUCKET limit).
+                pfrom->nAddrTokenBucket += MAX_ADDR_TO_SEND;
             }
             connman.MarkAddressGood(pfrom->addr);
         }
@@ -1378,13 +1381,6 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         int64_t nTimeOffset = nTime - GetTime();
         pfrom->nTimeOffset = nTimeOffset;
         AddTimeData(pfrom->addr, nTimeOffset);
-
-        // Relay alerts
-        {
-            LOCK(cs_mapAlerts);
-            BOOST_FOREACH(PAIRTYPE(const uint256, CAlert)& item, mapAlerts)
-                pfrom->PushAlert(item.second);
-        }
 
         // Feeler connections exist only to verify if address is online.
         if (pfrom->fFeeler) {
@@ -1466,10 +1462,40 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         std::vector<CAddress> vAddrOk;
         int64_t nNow = GetAdjustedTime();
         int64_t nSince = nNow - 10 * 60;
+
+
+        // track rate limiting within this message
+        uint64_t nProcessedAddrs = 0;
+        uint64_t nRatelimitedAddrs = 0;
+
+        // Update/increment addr rate limiting bucket.
+        const uint64_t nCurrentTime = GetMockableTimeMicros();
+        if (pfrom->nAddrTokenBucket < MAX_ADDR_PROCESSING_TOKEN_BUCKET) {
+          const uint64_t nTimeElapsed = std::max(nCurrentTime - pfrom->nAddrTokenTimestamp, uint64_t(0));
+          const double nIncrement = nTimeElapsed * MAX_ADDR_RATE_PER_SECOND / 1e6;
+          pfrom->nAddrTokenBucket = std::min<double>(pfrom->nAddrTokenBucket + nIncrement, MAX_ADDR_PROCESSING_TOKEN_BUCKET);
+        }
+        pfrom->nAddrTokenTimestamp = nCurrentTime;
+
+        // Randomize entries before processing, to prevent an attacker to
+        // determine which entries will make it through the rate limit
+        Shuffle(vAddr.begin(), vAddr.end(), FastRandomContext());
+
         BOOST_FOREACH(CAddress& addr, vAddr)
         {
             if (interruptMsgProc)
                 return true;
+
+            // apply rate limiting
+            if (!pfrom->fWhitelisted) {
+              if (pfrom->nAddrTokenBucket < 1.0) {
+                nRatelimitedAddrs++;
+                continue;
+              }
+              pfrom->nAddrTokenBucket -= 1.0;
+            }
+
+            nProcessedAddrs++;
 
             if ((addr.nServices & REQUIRED_SERVICES) != REQUIRED_SERVICES)
                 continue;
@@ -1487,6 +1513,13 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
             if (fReachable)
                 vAddrOk.push_back(addr);
         }
+
+        pfrom->nProcessedAddrs += nProcessedAddrs;
+        pfrom->nRatelimitedAddrs += nRatelimitedAddrs;
+
+        LogPrint("net", "Received addr: %u addresses (%u processed, %u rate-limited) peer=%d\n",
+                 vAddr.size(), nProcessedAddrs, nRatelimitedAddrs, pfrom->GetId());
+
         connman.AddNewAddresses(vAddrOk, pfrom->addr, 2 * 60 * 60);
         if (vAddr.size() < 1000)
             pfrom->fGetAddr = false;
@@ -2535,39 +2568,6 @@ bool static ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStr
         }
     }
 
-    else if (fAlerts && strCommand == NetMsgType::ALERT)
-    {
-        CAlert alert;
-        vRecv >> alert;
-
-        uint256 alertHash = alert.GetHash();
-        if (pfrom->setKnown.count(alertHash) == 0)
-        {
-            if (alert.ProcessAlert(chainparams.AlertKey()))
-            {
-                // Relay
-                pfrom->setKnown.insert(alertHash);
-                {
-                    
-                    connman.ForEachNode([&alert](CNode* pnode)
-                    {
-                        pnode->PushAlert(alert);
-                    });
-                }
-            }
-            else {
-                // Small DoS penalty so peers that send us lots of
-                // duplicate/expired/invalid-signature/whatever alerts
-                // eventually get banned.
-                // This isn't a Misbehaving(100) (immediate ban) because the
-                // peer might be an older or different implementation with
-                // a different signature key, etc.
-                Misbehaving(pfrom->GetId(), 10);
-            }
-        }
-    }
-
-
     else if (strCommand == NetMsgType::FILTERLOAD)
     {
         CBloomFilter filter;
@@ -3311,24 +3311,6 @@ bool SendMessages(CNode* pto, CConnman& connman, const std::atomic<bool>& interr
                 pto->nextSendTimeFeeFilter = timeNow + GetRandInt(MAX_FEEFILTER_CHANGE_DELAY) * 1000000;
             }
         }
-
-        //
-        // Message: alert
-        //
-        BOOST_FOREACH(const CAlert &alert, pto->vAlertToSend) {
-            // returns true if wasn't already contained in the set
-            if (pto->setKnown.insert(alert.GetHash()).second)
-            {
-                if (alert.AppliesTo(pto->nVersion, pto->strSubVer) ||
-                    alert.AppliesToMe() ||
-                    GetAdjustedTime() < alert.nRelayUntil)
-                {
-                    connman.PushMessage(pto, msgMaker.Make(NetMsgType::ALERT, alert));
-                    return true;
-                }
-            }
-        }
-        pto->vAlertToSend.clear();
 
     }
     return true;

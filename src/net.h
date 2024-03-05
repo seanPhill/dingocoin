@@ -8,7 +8,6 @@
 
 #include "addrdb.h"
 #include "addrman.h"
-#include "alert.h"
 #include "amount.h"
 #include "bloom.h"
 #include "compat.h"
@@ -55,6 +54,13 @@ static const int FEELER_INTERVAL = 120;
 static const unsigned int MAX_INV_SZ = 50000;
 /** The maximum number of new addresses to accumulate before announcing. */
 static const unsigned int MAX_ADDR_TO_SEND = 1000;
+/** The maximum rate of address records we're willing to process on average. Can be bypassed using
+ *  the NetPermissionFlags::Addr permission. */
+static constexpr double MAX_ADDR_RATE_PER_SECOND{0.1};
+/** The soft limit of the address processing token bucket (the regular MAX_ADDR_RATE_PER_SECOND
+ *  based increments won't go above this, but the MAX_ADDR_TO_SEND increment following GETADDR
+ *  is exempt from this limit). */
+static constexpr size_t MAX_ADDR_PROCESSING_TOKEN_BUCKET{MAX_ADDR_TO_SEND};
 /** Maximum length of incoming protocol messages (no message over 4 MB is currently acceptable). */
 static const unsigned int MAX_PROTOCOL_MESSAGE_LENGTH = 4 * 1000 * 1000;
 /** Maximum length of strSubVer in `version` message */
@@ -286,6 +292,8 @@ public:
 
     unsigned int GetReceiveFloodSize() const;
 
+    void SetMaxConnections(int newMaxConnections);
+
     void WakeMessageHandler();
 private:
     struct ListenSocket {
@@ -510,6 +518,8 @@ public:
     double dMinPing;
     std::string addrLocal;
     CAddress addr;
+    uint64_t nProcessedAddrs;
+    uint64_t nRatelimitedAddrs;
 };
 
 
@@ -638,6 +648,14 @@ public:
     int64_t nNextAddrSend;
     int64_t nNextLocalAddrSend;
 
+    /** Number of addresses that can be processed from this peer. */
+    double nAddrTokenBucket;
+    /** When nAddrTokenBucket was last updated, in microseconds */
+    int64_t nAddrTokenTimestamp;
+
+    std::atomic<uint64_t> nProcessedAddrs;
+    std::atomic<uint64_t> nRatelimitedAddrs;
+
     // inventory based relay
     CRollingBloomFilter filterInventoryKnown;
     // Set of transaction ids we still have to announce.
@@ -680,9 +698,6 @@ public:
     CCriticalSection cs_feeFilter;
     CAmount lastSentFeeFilter;
     int64_t nextSendTimeFeeFilter;
-
-    // Alert relay
-    std::vector<CAlert> vAlertToSend;
 
     CNode(NodeId id, ServiceFlags nLocalServicesIn, int nMyStartingHeightIn, SOCKET hSocketIn, const CAddress &addrIn, uint64_t nKeyedNetGroupIn, uint64_t nLocalHostNonceIn, const std::string &addrNameIn = "", bool fInboundIn = false);
     ~CNode();
@@ -773,15 +788,6 @@ public:
         }
     }
 
-    void PushAlert(const CAlert& _alert)
-    {
-        // don't relay to nodes which haven't sent their version message
-        if (_alert.IsInEffect() && nVersion != 0) {
-            vAlertToSend.push_back(_alert);
-        }
-    }
-
-
     void AddInventoryKnown(const CInv& inv)
     {
         {
@@ -800,12 +806,6 @@ public:
         } else if (inv.type == MSG_BLOCK) {
             vInventoryBlockToSend.push_back(inv.hash);
         }
-    }
-
-    void PushAlertHash(const uint256 &hash)
-    {
-        LOCK(cs_inventory);
-        vBlockHashesToAnnounce.push_back(hash);
     }
 
     void PushBlockHash(const uint256 &hash)

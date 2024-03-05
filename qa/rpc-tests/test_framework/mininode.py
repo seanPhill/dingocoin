@@ -40,7 +40,7 @@ import ltc_scrypt
 from test_framework.siphash import siphash256
 
 BIP0031_VERSION = 60000
-MY_VERSION = 70014  # past bip-31 for ping/pong
+MY_VERSION = 70143  # past bip-31 for ping/pong
 MY_SUBVERSION = b"/python-mininode-tester:0.0.3/"
 MY_RELAY = 1 # from version 70001 onwards, fRelay should be appended to version messages (BIP37)
 
@@ -219,12 +219,15 @@ def ToHex(obj):
 
 class CAddress(object):
     def __init__(self):
+        self.with_time = False
         self.nServices = 1
         self.pchReserved = b"\x00" * 10 + b"\xff" * 2
         self.ip = "0.0.0.0"
         self.port = 0
 
     def deserialize(self, f):
+        if self.with_time:
+            self.time = struct.unpack("<i", f.read(4))[0]
         self.nServices = struct.unpack("<Q", f.read(8))[0]
         self.pchReserved = f.read(12)
         self.ip = socket.inet_ntoa(f.read(4))
@@ -232,6 +235,8 @@ class CAddress(object):
 
     def serialize(self):
         r = b""
+        if self.with_time:
+            r += struct.pack("<i", self.time)
         r += struct.pack("<Q", self.nServices)
         r += self.pchReserved
         r += socket.inet_aton(self.ip)
@@ -241,6 +246,7 @@ class CAddress(object):
     def __repr__(self):
         return "CAddress(nServices=%i ip=%s port=%i)" % (self.nServices,
                                                          self.ip, self.port)
+
 
 MSG_WITNESS_FLAG = 1<<30
 

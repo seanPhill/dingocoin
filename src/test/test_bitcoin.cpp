@@ -31,7 +31,8 @@
 #include <boost/thread.hpp>
 
 std::unique_ptr<CConnman> g_connman;
-FastRandomContext insecure_rand_ctx(true);
+uint256 insecure_rand_seed = GetRandHash();
+FastRandomContext insecure_rand_ctx(insecure_rand_seed);
 
 extern bool fPrintToConsole;
 extern void noui_connect();
@@ -41,6 +42,7 @@ static const int COINBASE_MATURITY = 60*4; // 4 hours of blocks
 
 BasicTestingSetup::BasicTestingSetup(const std::string& chainName)
 {
+        RandomInit();
         ECC_Start();
         SetupEnvironment();
         SetupNetworking();
