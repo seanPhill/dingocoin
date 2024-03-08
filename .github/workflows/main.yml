@@ -128,7 +128,7 @@ jobs:
         name: windows-binaries
         path: ${{ env.ARTIFACT_DIR }}
 
-  # # MacOS build script adapted from https://github.com/dogecoin/dogecoin/blob/master/.github/workflows/ci.yml
+  # MacOS build script adapted from https://github.com/dogecoin/dogecoin/blob/master/.github/workflows/ci.yml
   # build-macos:
   #   name: Build for MacOS
   #   needs: create-source-distribution
@@ -136,7 +136,7 @@ jobs:
   #   env:
   #     name: x86_64-macos
   #     host: x86_64-apple-darwin11
-  #     os: ubuntu-18.04
+  #     os: ubuntu-20.04
   #     packages: cmake imagemagick libcap-dev librsvg2-bin libz-dev libtiff-tools libtinfo5 python3-setuptools xorriso libtinfo5
   #     config-opts: "--enable-gui=qt5 --enable-reduce-exports"
   #     goal: deploy
